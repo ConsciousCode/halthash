@@ -6,18 +6,18 @@
 			input {
 				display: inline-block;
 			}
-			
+
 			@keyframes spinner {
 				to { transform: rotate(360deg); }
 			}
-			
+
 			.spinner {
 				display: inline-block;
 				position: relative;
 				width: 20px;
 				height: 20px;
 			}
-			
+
 			.spinner.go::before {
 				content: '';
 				box-sizing: border-box;
@@ -30,7 +30,7 @@
 				border-right: 2px solid transparent;
 				animation: spinner .6s linear infinite;
 			}
-			
+
 			.result {
 				display: inline-block;
 				overflow-wrap: break-word;
@@ -43,17 +43,17 @@
 			function onEnter(query, fn) {
 				let el = document.querySelector(query);
 				el.addEventListener('keyup', ev => {
-					if(ev.keyCode === 13) {
+					if(ev.key === "Enter") {
 						ev.preventDefault();
 						fn(el);
 					}
-				})
+				});
 			}
-			
+
 			function $(q) {
 				return document.querySelector(q);
 			}
-			
+
 			function buf2hex(buf) {
 				let arr = new Uint8Array(buf), s = "";
 				for(let a of arr) {
@@ -64,20 +64,15 @@
 				}
 				return s;
 			}
-			
+
 			function str2arr(str) {
 				return new TextEncoder().encode(str);
 			}
-			
+
 			function arr2str(arr) {
-				return new TextDecoder('utf-8').decode(
-					new Uint8Array(arr)
-				);
+				return new TextDecoder('utf-8').decode(new Uint8Array(arr));
 			}
-				
-			let iv = crypto.getRandomValues(new Uint8Array(16));
-			let AES = {name: "AES-CBC", length: 256, iv};
-			
+
 			function hex2arr(str) {
 				let buf = new Uint8Array(str.length/2);
 				for(let i = 0; i < buf.length; ++i) {
@@ -85,52 +80,50 @@
 				}
 				return buf;
 			}
+
+			// AES configuration for encrypting using the halthash key
+			let iv = crypto.getRandomValues(new Uint8Array(16));
+			let AES = {name: "AES-CBC", length: 256, iv};
 		</script>
 	</head>
 	<body>
 		<section id="generate">
 			<input id="pass" placeholder="Password"/>
-			<div id="genspin" class="spinner"></div>
-			<br/>
+			<div id="genspin" class="spinner"></div><br/>
 			Key: <div id="key" class="result"></div><br/>
 			Verify: <div id="verify" class="result"></div><br/><br/>
-			
+
 			<script>
-				onEnter("#pass", el => {
-					let p = halt.prepare(el.value);
-					p.then(res => {
-						$("#key").textContent =
-							buf2hex(res.key);
-						$("#verify").textContent =
-							buf2hex(res.verify.halt) + " " +
-							buf2hex(res.verify.salt);
-					});
-					
-					$("#genspin").addEventListener("click", function() {
-						p.stop();
-						this.className = "spinner";
-					})
-					
+				let genpromise;
+				onEnter("#pass", async el => {
 					$("#genspin").className = "spinner go";
+					genpromise = halt.prepare(el.value);
+
+					let {key, verify: {halt:h, salt}} = await genpromise;
+					$("#key").textContent = buf2hex(key);
+					$("#verify").textContent =
+						buf2hex(h) + " " + buf2hex(salt);
+				});
+
+				$("#genspin").addEventListener("click", function() {
+					genpromise.stop();
+					this.className = "spinner";
 				});
 			</script>
-			
-			<input id="data" placeholder="Data"/> -&gt;
+
+			<input id="data" placeholder="Data"/> =&gt;
 			<div id="encoding" class="result"></div>
-			
+
 			<script>
-				onEnter("#data", el => {
+				onEnter("#data", async el => {
 					let key = hex2arr($("#key").textContent);
-					crypto.subtle.importKey(
+					key = await crypto.subtle.importKey(
 						'raw', key, AES, false, ['encrypt']
-					).then(key => {
-						return crypto.subtle.encrypt(
-							AES, key,
-							str2arr(el.value)
-						);
-					}).then(res => {
-						$("#encoding").textContent = buf2hex(res);
-					});
+					)
+					let res = await crypto.subtle.encrypt(
+						AES, key, str2arr(el.value)
+					);
+					$("#encoding").textContent = buf2hex(res);
 				});
 			</script>
 		</section>
@@ -138,43 +131,42 @@
 			<input id="decpass" placeholder="Password"/>
 			<div id="encspin"></div><br/>
 			Key: <div id="deckey"><div><br/>
-			
+
 			<div id="decres" class="result"></div>
-			
+
 			<script>
-				onEnter("#decpass", el => {
+				let decpromise;
+
+				onEnter("#decpass", async el => {
+					console.log(el);
+					$("#encspin").className = "spinner go";
+
 					let verify = $("#verify").textContent.split(" ");
-					
-					let p = halt.extract(
+
+					decpromise = halt.extract(
 						el.value, {
 							halt: hex2arr(verify[0]),
 							salt: hex2arr(verify[1])
 						}
 					);
-					
-					p.then(key => {
-						crypto.subtle.importKey(
-							'raw', key, AES, false, ['decrypt']
-						).then(key => {
-							return crypto.subtle.decrypt(
-								AES, key,
-								hex2arr(
-									$("#encoding").textContent
-								)
-							)
-						}).then(res => {
-							$("#decres").textContent =
-								arr2str(res);
-							$("#encspin").className = "spinner";
-						});
-					}).catch();
-					
-					$("#encspin").addEventListener("click", function() {
-						p.stop();
-						this.className = "spinner";
-					})
-					
-					$("#encspin").className = "spinner go";
+
+					let kx = await decpromise;
+					if(kx) {
+						let key = await crypto.subtle.importKey(
+							'raw', kx, AES, false, ['decrypt']
+						);
+
+						let res = await crypto.subtle.decrypt(
+							AES, key, hex2arr($("#encoding").textContent)
+						);
+						$("#decres").textContent = arr2str(res);
+					}
+					$("#encspin").className = "spinner";
+				});
+
+				$("#encspin").addEventListener("click", function() {
+					decpromise.stop();
+					this.className = "spinner";
 				});
 			</script>
 		</section>
